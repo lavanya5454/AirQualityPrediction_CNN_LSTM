@@ -1,666 +1,595 @@
-import streamlit as st
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
+import warnings
+warnings.filterwarnings("ignore")
+
 import numpy as np
 import pandas as pd
+import joblib
+import streamlit as st
 import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
-import warnings
-warnings.filterwarnings('ignore')
+from collections import Counter
 
-# ─── Page Configuration ──────────────────────────────────────────────────────
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+
+# ─────────────────────────────────────────────
+# PAGE CONFIG
+# ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="AirSense · PM2.5 Predictor",
+    page_title="AirSense · CNN-BiLSTM Predictor",
     page_icon="🌫️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ─── Custom CSS ───────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=DM+Sans:wght@300;400;500&display=swap');
+# ─────────────────────────────────────────────
+# PURPLE & WHITE THEME  (injected CSS)
+# ─────────────────────────────────────────────
+st.markdown(
+    """
+    <style>
+    /* ── Base ── */
+    html, body, [data-testid="stAppViewContainer"] {
+        background-color: #f9f7ff;
+        color: #1a0040;
+        font-family: 'Segoe UI', sans-serif;
+    }
 
-:root {
-    --bg-deep:    #0d0a14;
-    --bg-mid:     #130f1e;
-    --bg-card:    #1a1428;
-    --border:     rgba(160,120,255,0.18);
-    --purple-lo:  #6b3fa0;
-    --purple-hi:  #a972f5;
-    --purple-glow:#c49dff;
-    --white-soft: #f0eaf8;
-    --white-dim:  #b8aed0;
-    --accent:     #e0cfff;
-    --danger:     #ff6b8a;
-    --good:       #72e8a0;
-    --warn:       #f5c842;
-}
+    /* ── Sidebar ── */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #3b0086 0%, #6a0dad 100%);
+        color: #fff;
+    }
+    [data-testid="stSidebar"] * {
+        color: #f0e6ff !important;
+    }
+    [data-testid="stSidebar"] .stMarkdown h2,
+    [data-testid="stSidebar"] .stMarkdown h3 {
+        color: #ffffff !important;
+    }
+    [data-testid="stSidebar"] hr {
+        border-color: rgba(255,255,255,0.25);
+    }
+    [data-testid="stSidebar"] .stAlert {
+        background: rgba(255,255,255,0.12) !important;
+        border: 1px solid rgba(255,255,255,0.3) !important;
+        color: #f0e6ff !important;
+    }
 
-html, body, [data-testid="stAppViewContainer"] {
-    background: var(--bg-deep) !important;
-    font-family: 'DM Sans', sans-serif;
-    color: var(--white-soft);
-}
+    /* ── Main area headings ── */
+    h1, h2, h3, h4, h5 { color: #4a0080; }
 
-/* Hide Streamlit chrome */
-#MainMenu, footer, header { visibility: hidden; }
-[data-testid="stToolbar"] { display: none; }
+    /* ── Metric cards ── */
+    [data-testid="stMetric"] {
+        background: #ffffff;
+        border: 1.5px solid #c084fc;
+        border-radius: 12px;
+        padding: 1rem;
+        box-shadow: 0 2px 8px rgba(107,33,168,0.08);
+    }
+    [data-testid="stMetricLabel"]  { color: #6b21a8 !important; font-weight: 600; }
+    [data-testid="stMetricValue"]  { color: #3b0086 !important; }
+    [data-testid="stMetricDelta"]  { color: #7c3aed !important; }
 
-/* Sidebar */
-[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0f0b1a 0%, #160e28 100%) !important;
-    border-right: 1px solid var(--border);
-}
-[data-testid="stSidebar"] * { color: var(--white-soft) !important; }
-[data-testid="stSidebarContent"] { padding: 1.5rem 1rem; }
+    /* ── Form / input widgets ── */
+    [data-testid="stForm"] {
+        background: #ffffff;
+        border: 1.5px solid #ddd6fe;
+        border-radius: 14px;
+        padding: 1.5rem 1.5rem 0.5rem;
+        box-shadow: 0 3px 12px rgba(107,33,168,0.07);
+    }
+    .stNumberInput input, .stSelectbox select, .stSlider {
+        border-color: #a855f7 !important;
+    }
 
-/* Inputs */
-input, textarea, select,
-[data-testid="stNumberInput"] input,
-[data-baseweb="input"] input {
-    background: var(--bg-card) !important;
-    color: var(--white-soft) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 8px !important;
-}
-[data-baseweb="select"] > div {
-    background: var(--bg-card) !important;
-    border: 1px solid var(--border) !important;
-    color: var(--white-soft) !important;
-}
-[data-baseweb="popover"] * { background: #1e1632 !important; color: var(--white-soft) !important; }
+    /* ── Primary button ── */
+    .stButton > button[kind="primary"],
+    button[data-testid="baseButton-primary"] {
+        background: linear-gradient(90deg, #6a0dad, #9333ea);
+        color: white !important;
+        border: none;
+        border-radius: 10px;
+        font-weight: 700;
+        font-size: 1rem;
+        padding: 0.65rem 1.5rem;
+        box-shadow: 0 4px 14px rgba(106,13,173,0.35);
+        transition: all 0.2s;
+    }
+    .stButton > button[kind="primary"]:hover,
+    button[data-testid="baseButton-primary"]:hover {
+        background: linear-gradient(90deg, #5b009e, #7e22ce);
+        box-shadow: 0 6px 20px rgba(106,13,173,0.5);
+        transform: translateY(-1px);
+    }
 
-/* Slider */
-[data-baseweb="slider"] [role="slider"] { background: var(--purple-hi) !important; }
-[data-testid="stSlider"] div[data-testid] { background: var(--purple-lo) !important; }
+    /* ── Expander ── */
+    [data-testid="stExpander"] {
+        border: 1.5px solid #ddd6fe;
+        border-radius: 10px;
+        background: #ffffff;
+    }
 
-/* Buttons */
-[data-testid="stButton"] button {
-    background: linear-gradient(135deg, var(--purple-lo), var(--purple-hi)) !important;
-    color: #fff !important;
-    border: none !important;
-    border-radius: 10px !important;
-    font-family: 'DM Sans', sans-serif !important;
-    font-weight: 500 !important;
-    letter-spacing: 0.04em !important;
-    padding: 0.55rem 1.4rem !important;
-    transition: all 0.25s ease !important;
-    box-shadow: 0 0 18px rgba(169,114,245,0.25) !important;
-}
-[data-testid="stButton"] button:hover {
-    box-shadow: 0 0 28px rgba(169,114,245,0.55) !important;
-    transform: translateY(-1px) !important;
-}
+    /* ── Divider ── */
+    hr { border-color: #ddd6fe; }
 
-/* Tabs */
-[data-testid="stTabs"] [data-baseweb="tab-list"] {
-    background: var(--bg-mid) !important;
-    border-radius: 12px;
-    padding: 4px;
-    gap: 4px;
-    border-bottom: none !important;
-}
-[data-testid="stTabs"] [data-baseweb="tab"] {
-    background: transparent !important;
-    color: var(--white-dim) !important;
-    border-radius: 9px !important;
-    font-family: 'DM Sans', sans-serif !important;
-    font-size: 0.85rem !important;
-    border: none !important;
-}
-[data-testid="stTabs"] [aria-selected="true"] {
-    background: linear-gradient(135deg, var(--purple-lo), var(--purple-hi)) !important;
-    color: #fff !important;
-}
+    /* ── Info box ── */
+    .stAlert[data-baseweb="notification"] {
+        background: #f3e8ff !important;
+        border-left: 4px solid #7c3aed !important;
+        color: #3b0086 !important;
+    }
 
-/* Metric cards */
-[data-testid="metric-container"] {
-    background: var(--bg-card) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 14px !important;
-    padding: 1rem !important;
-}
-[data-testid="stMetricValue"] { color: var(--purple-glow) !important; font-size: 1.7rem !important; }
-[data-testid="stMetricLabel"] { color: var(--white-dim) !important; }
-[data-testid="stMetricDelta"] { color: var(--good) !important; }
+    /* ── Caption / small text ── */
+    .stCaption, small { color: #7c3aed; }
 
-/* Section headers */
-h1, h2, h3 {
-    font-family: 'Cormorant Garamond', serif !important;
-    color: var(--white-soft) !important;
-}
+    /* ── Dataframe ── */
+    [data-testid="stDataFrame"] { border: 1px solid #ddd6fe; border-radius: 8px; }
 
-/* Divider */
-hr { border-color: var(--border) !important; }
-
-/* Expander */
-[data-testid="stExpander"] {
-    background: var(--bg-card) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 12px !important;
-}
-[data-testid="stExpander"] summary { color: var(--accent) !important; }
-
-/* Scrollbar */
-::-webkit-scrollbar { width: 5px; }
-::-webkit-scrollbar-track { background: var(--bg-deep); }
-::-webkit-scrollbar-thumb { background: var(--purple-lo); border-radius: 4px; }
-</style>
-""", unsafe_allow_html=True)
-
-# ─── Helpers ──────────────────────────────────────────────────────────────────
-PLOT_LAYOUT = dict(
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
-    font_color="#b8aed0",
-    font_family="DM Sans",
-    xaxis=dict(gridcolor="rgba(160,120,255,0.1)", zerolinecolor="rgba(160,120,255,0.15)"),
-    yaxis=dict(gridcolor="rgba(160,120,255,0.1)", zerolinecolor="rgba(160,120,255,0.15)"),
+    /* ── Download button ── */
+    .stDownloadButton > button {
+        border: 2px solid #7c3aed !important;
+        color: #7c3aed !important;
+        border-radius: 8px;
+        font-weight: 600;
+        background: transparent;
+    }
+    .stDownloadButton > button:hover {
+        background: #f3e8ff !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
-DEFAULT_MARGIN = dict(l=20, r=20, t=40, b=20)
 
-def aqi_label(pm):
-    if pm <= 12:   return "Good",       "#72e8a0"
-    if pm <= 35.4: return "Moderate",   "#f5c842"
-    if pm <= 55.4: return "Sensitive",  "#f5a742"
-    if pm <= 150.4:return "Unhealthy",  "#ff6b8a"
-    if pm <= 250.4:return "Very Unhealthy","#c94fff"
-    return "Hazardous", "#ff3355"
+# ─────────────────────────────────────────────
+# CONSTANTS
+# ─────────────────────────────────────────────
+LOOKBACK    = 48
+FORECAST    = 24
+TARGET_COL  = "pm2.5"
+MODEL_PATH  = "best_aq_model.h5"
+SCALER_PATH = "feature_scaler.pkl"
 
-def card(content_html: str, height: str = "auto"):
-    st.markdown(f"""
-    <div style="
-        background: linear-gradient(135deg,#1a1428,#130f1e);
-        border: 1px solid rgba(160,120,255,0.18);
-        border-radius: 16px;
-        padding: 1.4rem 1.6rem;
-        height: {height};
-        margin-bottom: 0.4rem;
-    ">{content_html}</div>""", unsafe_allow_html=True)
+FEATURE_COLS = [
+    "pm2.5", "DEWP", "TEMP", "PRES", "cbwd",
+    "Iws", "Is", "Ir",
+    "hour_sin", "hour_cos", "month_sin", "month_cos",
+    "pm25_lag1", "pm25_lag3", "pm25_lag6", "pm25_roll24",
+]
 
-# ─── Sidebar ──────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("""
-    <div style="text-align:center; margin-bottom:1.5rem;">
-        <div style="font-size:2.4rem;">🌫️</div>
-        <h2 style="font-family:'Cormorant Garamond',serif; font-size:1.6rem;
-                   margin:0; background:linear-gradient(135deg,#a972f5,#e0cfff);
-                   -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
-            AirSense
-        </h2>
-        <p style="color:#6b5590; font-size:0.75rem; margin:2px 0 0;">
-            PM2.5 · CNN–BiLSTM · Attention
-        </p>
-    </div>
-    <hr style="border-color:rgba(160,120,255,0.15); margin-bottom:1.4rem;">
-    """, unsafe_allow_html=True)
+WIND_DIR_MAP = {"NE": 0, "NW": 1, "SE": 2, "SW": 3, "CV (calm)": 4}
 
-    st.markdown("#### 🌡️ Current Conditions")
-    temp    = st.slider("Temperature (°C)", -20.0, 42.0, 14.0, 0.5)
-    dewp    = st.slider("Dew Point (°C)",   -40.0, 28.0, -2.0, 0.5)
-    pres    = st.slider("Pressure (hPa)",   990.0, 1040.0, 1013.0, 0.5)
-    iws     = st.slider("Wind Speed (m/s)",   0.0,  80.0,   5.0, 0.5)
+AQI_THRESHOLDS = [
+    (12.0,         "Good",                  "#16a34a", "😊"),
+    (35.4,         "Moderate",              "#ca8a04", "😐"),
+    (55.4,         "Unhealthy (Sensitive)", "#ea580c", "😷"),
+    (150.4,        "Unhealthy",             "#dc2626", "🤢"),
+    (250.4,        "Very Unhealthy",        "#7e22ce", "🤮"),
+    (float("inf"), "Hazardous",             "#1e1b4b", "☠️"),
+]
 
-    st.markdown("#### 🧭 Wind & Precipitation")
-    wind_dir = st.selectbox("Wind Direction", ["NW", "NE", "SW", "SE", "cv"])
-    snow    = st.slider("Snow Hours (Is)",   0, 10, 0)
-    rain    = st.slider("Rain Hours (Ir)",   0, 10, 0)
+UNHEALTHY_THRESHOLD = 55.4   # PM2.5 > this → any "Unhealthy" tier
 
-    st.markdown("#### 📅 Time Context")
-    col1, col2 = st.columns(2)
-    with col1: month = st.selectbox("Month", list(range(1,13)), index=0)
-    with col2: hour  = st.selectbox("Hour",  list(range(0,24)),  index=8)
-    day = st.slider("Day of Month", 1, 31, 15)
+def aqi_info(pm_value):
+    for limit, label, color, icon in AQI_THRESHOLDS:
+        if pm_value <= limit:
+            return label, color, icon
+    return "Hazardous", "#1e1b4b", "☠️"
 
-    st.markdown("---")
-    run_btn = st.button("⚡ Predict PM2.5", use_container_width=True)
+# ─────────────────────────────────────────────
+# CUSTOM KERAS LAYER
+# ─────────────────────────────────────────────
+@tf.keras.utils.register_keras_serializable(package="custom")
+class BahdanauAttention(layers.Layer):
+    def __init__(self, units, **kwargs):
+        super().__init__(**kwargs)
+        self.units = units
+        self.W1 = layers.Dense(units)
+        self.W2 = layers.Dense(units)
+        self.V  = layers.Dense(1)
 
-# ─── Mock Prediction Engine ───────────────────────────────────────────────────
-def simulate_prediction(temp, dewp, pres, iws, wind_dir, snow, rain, month, hour, day):
-    """Rule-based simulator that mimics CNN-BiLSTM-Attention patterns."""
-    np.random.seed(int(temp*10 + dewp + iws))
-    base = 60
+    def call(self, query, values):
+        q       = tf.expand_dims(query, 1)
+        score   = self.V(tf.nn.tanh(self.W1(values) + self.W2(q)))
+        weights = tf.nn.softmax(score, axis=1)
+        context = tf.reduce_sum(weights * values, axis=1)
+        return context, weights
 
-    # Seasonal effect
-    if month in [12, 1, 2]:  base += 55
-    elif month in [6, 7, 8]: base -= 20
-    elif month in [3, 4, 5]: base += 10
+    def get_config(self):
+        cfg = super().get_config()
+        cfg.update({"units": self.units})
+        return cfg
 
-    # Temp & dew: humidity proxy
-    base += max(0, (dewp - temp + 20) * 1.8)
+# ─────────────────────────────────────────────
+# LOAD MODEL & SCALER
+# ─────────────────────────────────────────────
+@st.cache_resource(show_spinner="⏳ Loading CNN-BiLSTM model…")
+def load_artifacts():
+    model  = keras.models.load_model(
+        MODEL_PATH,
+        custom_objects={"BahdanauAttention": BahdanauAttention},
+        compile=False,
+    )
+    scaler = joblib.load(SCALER_PATH)
+    return model, scaler, scaler.n_features_in_
 
-    # Wind disperses
-    base -= iws * 0.9
-    if wind_dir in ["NW", "N"]: base -= 12
-    elif wind_dir == "cv":       base += 18
+# ─────────────────────────────────────────────
+# BUILD 48-HOUR WINDOW FROM USER INPUTS
+# ─────────────────────────────────────────────
+def build_48h_window(pm25, dewp, temp, pres, cbwd_code,
+                     iws, snow_hrs, rain_hrs, month, current_hour,
+                     feature_cols):
+    rng = np.random.default_rng(42)
+    n   = LOOKBACK
 
-    # Rain / snow washout
-    base -= rain * 8 + snow * 5
+    hour_offsets = np.arange(n)
+    abs_hours    = (current_hour - (n - 1 - hour_offsets)) % 24
+    abs_months   = np.full(n, month)
 
-    # Pressure (high → stagnant → worse)
-    base += (pres - 1013) * 0.35
+    trend    = np.linspace(pm25 * 0.7, pm25, n)
+    noise    = rng.normal(0, max(pm25 * 0.06, 2), n)
+    diurnal  = 10 * np.sin(2 * np.pi * abs_hours / 24)
+    pm25_arr = np.clip(trend + noise + diurnal, 1, 1000)
+    pm25_arr[-1] = pm25
 
-    # Diurnal: morning rush & evening
-    if hour in [7, 8, 9]:    base += 22
-    elif hour in [18, 19]:   base += 14
-    elif hour in [2, 3, 4]:  base -= 12
+    dewp_arr = dewp + rng.normal(0, 0.5, n)
+    temp_arr = temp + rng.normal(0, 0.8, n)
+    pres_arr = pres + rng.normal(0, 0.3, n)
+    iws_arr  = np.clip(iws + rng.normal(0, iws * 0.05 + 0.5, n), 0.45, 600)
+    cbwd_arr = np.full(n, float(cbwd_code))
+    is_arr   = np.full(n, float(snow_hrs))
+    ir_arr   = np.full(n, float(rain_hrs))
 
-    base = max(5, base)
-    noise = np.random.normal(0, 8)
+    hour_sin  = np.sin(2 * np.pi * abs_hours  / 24)
+    hour_cos  = np.cos(2 * np.pi * abs_hours  / 24)
+    month_sin = np.sin(2 * np.pi * abs_months / 12)
+    month_cos = np.cos(2 * np.pi * abs_months / 12)
 
-    # 24-hour forecast
-    hours = np.arange(24)
-    diurnal = 12 * np.sin((hours - 6) * np.pi / 12)
-    forecast = base + diurnal + np.random.normal(0, 6, 24)
-    forecast = np.clip(forecast, 2, 500)
+    pm25_lag1   = np.roll(pm25_arr, 1);  pm25_lag1[0]  = pm25_arr[0]
+    pm25_lag3   = np.roll(pm25_arr, 3);  pm25_lag3[:3] = pm25_arr[0]
+    pm25_lag6   = np.roll(pm25_arr, 6);  pm25_lag6[:6] = pm25_arr[0]
+    pm25_roll24 = pd.Series(pm25_arr).rolling(24, min_periods=1).mean().values
 
-    return float(base + noise), forecast
+    raw = {
+        "pm2.5": pm25_arr, "DEWP": dewp_arr, "TEMP": temp_arr, "PRES": pres_arr,
+        "cbwd": cbwd_arr, "Iws": iws_arr, "Is": is_arr, "Ir": ir_arr,
+        "hour_sin": hour_sin, "hour_cos": hour_cos,
+        "month_sin": month_sin, "month_cos": month_cos,
+        "pm25_lag1": pm25_lag1, "pm25_lag3": pm25_lag3,
+        "pm25_lag6": pm25_lag6, "pm25_roll24": pm25_roll24,
+    }
 
-def simulate_history():
-    """Simulate 48h of input data resembling Beijing dataset."""
-    np.random.seed(42)
-    hours = np.arange(48)
-    pm = 80 + 30 * np.sin(hours * np.pi / 12) + np.random.normal(0, 12, 48)
-    pm = np.clip(pm, 5, 350)
-    t  = 14 + 4 * np.sin(hours * np.pi / 24) + np.random.normal(0, 1, 48)
-    w  = 5  + 2 * np.abs(np.random.normal(0, 1, 48))
-    return hours, pm, t, w
+    df = pd.DataFrame({k: raw[k] for k in feature_cols if k in raw})
+    for c in feature_cols:
+        if c not in df.columns:
+            df[c] = 0.0
+    return df[feature_cols]
 
-# ─── Header ───────────────────────────────────────────────────────────────────
-st.markdown("""
-<div style="
-    background: linear-gradient(135deg, #0f0b1a 0%, #1e1240 50%, #130f1e 100%);
-    border: 1px solid rgba(160,120,255,0.22);
-    border-radius: 20px;
-    padding: 2.2rem 2.5rem 1.8rem;
-    margin-bottom: 1.6rem;
-    position: relative;
-    overflow: hidden;
-">
-  <div style="
-    position:absolute; top:-40px; right:-40px;
-    width:180px; height:180px; border-radius:50%;
-    background:radial-gradient(circle, rgba(169,114,245,0.18) 0%, transparent 70%);
-  "></div>
-  <p style="color:#a972f5; font-size:0.78rem; letter-spacing:0.18em; margin:0 0 6px;
-            text-transform:uppercase; font-weight:500;">Beijing · Hourly Monitor</p>
-  <h1 style="font-family:'Cormorant Garamond',serif; font-size:2.6rem;
-             font-weight:300; margin:0; line-height:1.15;
-             background:linear-gradient(135deg,#f0eaf8,#c49dff);
-             -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
-    Air Quality Intelligence
-  </h1>
-  <p style="color:#6b5590; font-size:0.85rem; margin:10px 0 0; max-width:560px;">
-    1D-CNN → BiLSTM × 2 → Bahdanau Attention → 24-hour PM2.5 forecast &nbsp;·&nbsp;
-    UCI Beijing PM2.5 Dataset (2010–2014)
-  </p>
-</div>
-""", unsafe_allow_html=True)
+# ─────────────────────────────────────────────
+# PREDICTION PIPELINE
+# ─────────────────────────────────────────────
+def predict_24h(df_48h, model, scaler, feature_cols):
+    scaled      = scaler.transform(df_48h[feature_cols].values)
+    inp         = scaled[np.newaxis, ...]
+    pred_scaled = model.predict(inp, verbose=0)[0]
 
-# ─── Tabs ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs([
-    "  🔮 Forecast  ", "  📊 Historical Data  ",
-    "  🧠 Model Insights  ", "  ℹ️ About  "
-])
+    t_idx  = list(feature_cols).index(TARGET_COL)
+    n_feat = len(feature_cols)
+    dummy  = np.zeros((FORECAST, n_feat))
+    dummy[:, t_idx] = pred_scaled
+    raw    = np.clip(scaler.inverse_transform(dummy)[:, t_idx], 0, None)
 
-# ══════════════════════════════════════════════════════════════
-# TAB 1 — FORECAST
-# ══════════════════════════════════════════════════════════════
-with tab1:
-    if run_btn or True:   # show on load too
-        predicted_pm, forecast_24h = simulate_prediction(
-            temp, dewp, pres, iws, wind_dir, snow, rain, month, hour, day
+    results = []
+    for h, val in enumerate(raw, 1):
+        label, color, icon = aqi_info(float(val))
+        results.append({"hour": h, "pm25": float(val),
+                         "category": label, "color": color, "icon": icon})
+    return results
+
+# ─────────────────────────────────────────────
+# UI HELPERS
+# ─────────────────────────────────────────────
+CHART_BG   = "#ffffff"
+CHART_GRID = "#ede9fe"
+CHART_FONT = "#3b0086"
+LINE_COLOR = "#7c3aed"
+
+def render_aqi_legend():
+    cols = st.columns(len(AQI_THRESHOLDS))
+    for col, (limit, label, color, icon) in zip(cols, AQI_THRESHOLDS):
+        lim_str = f"≤ {limit}" if limit != float("inf") else "> 250"
+        col.markdown(
+            f"<div style='background:{color};border-radius:10px;padding:9px 6px;"
+            f"text-align:center;color:white;font-size:0.73rem;box-shadow:0 2px 6px rgba(0,0,0,0.15);'>"
+            f"{icon}<br><b>{label}</b><br><span style='opacity:.9'>{lim_str} µg/m³</span></div>",
+            unsafe_allow_html=True,
         )
-        label, color = aqi_label(predicted_pm)
 
-        # ── Metric Row ──────────────────────────────────────────
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("PM2.5 Now (µg/m³)", f"{predicted_pm:.1f}", f"AQI: {label}")
-        with c2:
-            peak = max(forecast_24h)
-            st.metric("24h Peak (µg/m³)",  f"{peak:.1f}", f"Hr {np.argmax(forecast_24h):02d}:00")
-        with c3:
-            avg24 = np.mean(forecast_24h)
-            l2, _ = aqi_label(avg24)
-            st.metric("24h Avg (µg/m³)",   f"{avg24:.1f}", l2)
-        with c4:
-            st.metric("Wind Speed",         f"{iws} m/s", wind_dir)
 
-        st.markdown("<br>", unsafe_allow_html=True)
+def render_metrics(results):
+    values  = [r["pm25"] for r in results]
+    peak_h  = results[int(np.argmax(values))]
+    low_h   = results[int(np.argmin(values))]
+    avg_val = float(np.mean(values))
+    avg_lbl, _, _ = aqi_info(avg_val)
+    unhealthy_hrs = sum(1 for r in results if r["pm25"] > UNHEALTHY_THRESHOLD)
 
-        # ── AQI Banner ──────────────────────────────────────────
-        st.markdown(f"""
-        <div style="
-            background: linear-gradient(135deg, {color}18, {color}06);
-            border-left: 4px solid {color};
-            border-radius: 12px;
-            padding: 1rem 1.5rem;
-            margin-bottom: 1.2rem;
-            display: flex; align-items: center; gap: 1rem;
-        ">
-          <span style="font-size:2rem;">{'✅' if label=='Good' else '⚠️' if label in ['Moderate','Sensitive'] else '🚨'}</span>
-          <div>
-            <p style="margin:0; font-size:1.15rem; font-weight:600; color:{color};">
-              Air Quality: {label}
-            </p>
-            <p style="margin:2px 0 0; color:#b8aed0; font-size:0.82rem;">
-              Current PM2.5 = {predicted_pm:.1f} µg/m³ &nbsp;|&nbsp; 
-              {'Safe for outdoor activity.' if label == 'Good' else
-               'Sensitive groups should limit prolonged exertion.' if label in ['Moderate','Sensitive'] else
-               'Limit outdoor exposure. Wear N95 mask.'}
-            </p>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("📊 Average PM2.5",   f"{avg_val:.1f} µg/m³",        delta=avg_lbl,                     delta_color="off")
+    c2.metric("📈 Peak PM2.5",      f"{peak_h['pm25']:.1f} µg/m³", delta=f"at +{peak_h['hour']}h",    delta_color="inverse")
+    c3.metric("📉 Lowest PM2.5",    f"{low_h['pm25']:.1f} µg/m³",  delta=f"at +{low_h['hour']}h",     delta_color="normal")
+    c4.metric("⚠️ Unhealthy Hours", f"{unhealthy_hrs} / 24",        delta="hours PM2.5 > 55.4 µg/m³",  delta_color="off")
 
-        # ── 24h Forecast Chart ──────────────────────────────────
-        fig = go.Figure()
-        hours_x = [f"{h:02d}:00" for h in range(24)]
-        colors_bar = [aqi_label(v)[1] for v in forecast_24h]
 
-        # Gradient area fill
-        fig.add_trace(go.Scatter(
-            x=hours_x, y=forecast_24h,
-            mode='lines',
-            line=dict(color='#a972f5', width=2.5),
-            fill='tozeroy',
-            fillcolor='rgba(169,114,245,0.12)',
-            name='PM2.5 Forecast',
-            hovertemplate='<b>%{x}</b><br>PM2.5: %{y:.1f} µg/m³<extra></extra>'
+def render_forecast_chart(results):
+    hours  = [r["hour"]     for r in results]
+    values = [r["pm25"]     for r in results]
+    colors = [r["color"]    for r in results]
+    labels = [r["category"] for r in results]
+
+    band_x = hours + hours[::-1]
+    band_y = [v * 1.1 for v in values] + [v * 0.9 for v in values[::-1]]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=band_x, y=band_y,
+        fill="toself", fillcolor="rgba(124,58,237,0.08)",
+        line=dict(color="rgba(0,0,0,0)"),
+        hoverinfo="skip", name="±10% band",
+    ))
+    fig.add_trace(go.Scatter(
+        x=hours, y=values,
+        mode="lines+markers",
+        line=dict(color=LINE_COLOR, width=2.5),
+        marker=dict(size=10, color=colors, line=dict(width=1.5, color="white")),
+        hovertemplate="Hour +%{x}<br>PM2.5: %{y:.1f} µg/m³<br>%{text}<extra></extra>",
+        text=labels,
+        name="Model Forecast",
+    ))
+    for limit, label, color, _ in AQI_THRESHOLDS[:-1]:
+        fig.add_hline(y=limit, line_dash="dot", line_color=color, line_width=1,
+                      annotation_text=label, annotation_position="right",
+                      annotation_font_color=color, annotation_font_size=10)
+    fig.update_layout(
+        title=dict(text="24-Hour PM2.5 Forecast  ·  CNN-BiLSTM Model Output",
+                   font=dict(color=CHART_FONT, size=16)),
+        xaxis=dict(title="Hours Ahead", dtick=2, gridcolor=CHART_GRID,
+                   color=CHART_FONT, zerolinecolor=CHART_GRID),
+        yaxis=dict(title="PM2.5 (µg/m³)", gridcolor=CHART_GRID,
+                   color=CHART_FONT, zerolinecolor=CHART_GRID),
+        plot_bgcolor=CHART_BG, paper_bgcolor=CHART_BG,
+        font_color=CHART_FONT, height=430,
+        legend=dict(orientation="h", y=-0.18, font_color=CHART_FONT),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_aqi_distribution(results):
+    counts     = Counter(r["category"] for r in results)
+    colors_map = {label: color for _, label, color, _ in AQI_THRESHOLDS}
+    labels_    = list(counts.keys())
+    vals_      = [counts[l] for l in labels_]
+    clrs_      = [colors_map.get(l, "#aaa") for l in labels_]
+
+    fig = go.Figure(go.Pie(
+        labels=labels_, values=vals_,
+        marker=dict(colors=clrs_), hole=0.45,
+        textinfo="label+percent",
+        hovertemplate="%{label}: %{value} hours<extra></extra>",
+    ))
+    fig.update_layout(
+        title=dict(text="AQI Distribution (24h)", font=dict(color=CHART_FONT)),
+        plot_bgcolor=CHART_BG, paper_bgcolor=CHART_BG,
+        font_color=CHART_FONT, height=370, showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_hourly_table(results):
+    rows = []
+    for r in results:
+        badge = (
+            f"<span style='background:{r['color']};color:white;padding:3px 10px;"
+            f"border-radius:12px;font-size:0.8rem;font-weight:600;'>"
+            f"{r['icon']} {r['category']}</span>"
+        )
+        rows.append({"Hour": f"+{r['hour']:02d}h",
+                     "PM2.5 (µg/m³)": f"{r['pm25']:.1f}",
+                     "AQI Category": badge})
+    st.write(pd.DataFrame(rows).to_html(escape=False, index=False),
+             unsafe_allow_html=True)
+
+
+def render_input_history(df_48h):
+    with st.expander("🔍 View generated 48-hour input window sent to model"):
+        pm_vals = df_48h["pm2.5"].values
+        fig = go.Figure(go.Scatter(
+            x=list(range(LOOKBACK - 1, -1, -1)),
+            y=pm_vals,
+            mode="lines+markers",
+            line=dict(color="#9333ea", width=2),
+            marker=dict(size=5, color="#6a0dad"),
+            name="PM2.5 (past 48h)",
+            hovertemplate="-%{x}h ago<br>PM2.5: %{y:.1f} µg/m³<extra></extra>",
         ))
-
-        # Threshold lines
-        for thresh, lbl, col in [(12,'Good','#72e8a0'),(35.4,'Moderate','#f5c842'),(55.4,'Sensitive','#f5a742'),(150.4,'Unhealthy','#ff6b8a')]:
-            fig.add_hline(y=thresh, line=dict(color=col, width=1, dash='dot'),
-                          annotation_text=lbl, annotation_font_color=col,
-                          annotation_font_size=10)
-
         fig.update_layout(
-            **PLOT_LAYOUT,
-            margin=DEFAULT_MARGIN,
-            title=dict(text="24-Hour PM2.5 Forecast", font_size=15, font_color="#c49dff"),
-            showlegend=False, height=340,
+            title=dict(text="Historical PM2.5 — 48-Hour Input Window",
+                       font=dict(color=CHART_FONT)),
+            xaxis=dict(title="Hours Before Now", autorange="reversed",
+                       gridcolor=CHART_GRID, color=CHART_FONT),
+            yaxis=dict(title="PM2.5 (µg/m³)", gridcolor=CHART_GRID, color=CHART_FONT),
+            plot_bgcolor=CHART_BG, paper_bgcolor=CHART_BG,
+            font_color=CHART_FONT, height=300,
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(df_48h.style.format("{:.3f}"), use_container_width=True)
 
-        # ── Wind Rose / Radar ────────────────────────────────────
-        st.markdown("##### Input Feature Snapshot")
-        col_l, col_r = st.columns([1, 1])
+# ─────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────
+def main():
+    try:
+        model, scaler, n_feat = load_artifacts()
+        model_loaded = True
+    except Exception as e:
+        st.error(f"❌ Could not load model: {e}")
+        model_loaded = False
 
-        with col_l:
-            cats  = ['Temp', 'Dew Pt', 'Pressure\n(norm)', 'Wind\nSpeed', 'Rain', 'Snow']
-            vals  = [
-                (temp + 20) / 62,
-                (dewp + 40) / 68,
-                (pres - 990) / 50,
-                iws / 80,
-                rain / 10,
-                snow / 10,
-            ]
-            fig2 = go.Figure(go.Scatterpolar(
-                r=vals + [vals[0]],
-                theta=cats + [cats[0]],
-                fill='toself',
-                fillcolor='rgba(169,114,245,0.18)',
-                line=dict(color='#a972f5', width=2),
-                name='Features',
-            ))
-            fig2.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#b8aed0",
-                font_family="DM Sans",
-                polar=dict(
-                    bgcolor='rgba(0,0,0,0)',
-                    radialaxis=dict(visible=True, range=[0,1],
-                                   gridcolor='rgba(160,120,255,0.15)',
-                                   tickfont_color='#6b5590'),
-                    angularaxis=dict(gridcolor='rgba(160,120,255,0.15)',
-                                     tickfont_color='#b8aed0'),
-                ),
-                title=dict(text="Normalised Inputs", font_size=13, font_color="#c49dff"),
-                height=300, margin=dict(l=30, r=30, t=50, b=20),
-            )
-            st.plotly_chart(fig2, use_container_width=True)
+    feature_cols = FEATURE_COLS[:n_feat] if model_loaded else FEATURE_COLS
 
-        with col_r:
-            # Gauge
-            fig3 = go.Figure(go.Indicator(
-                mode="gauge+number+delta",
-                value=predicted_pm,
-                delta={'reference': 35.4, 'increasing': {'color': '#ff6b8a'},
-                       'decreasing': {'color': '#72e8a0'}},
-                number={'suffix': ' µg/m³', 'font': {'color': '#c49dff', 'size': 22}},
-                gauge={
-                    'axis': {'range': [0, 300], 'tickcolor': '#6b5590',
-                             'tickfont': {'color': '#6b5590'}},
-                    'bar': {'color': color, 'thickness': 0.28},
-                    'bgcolor': '#130f1e',
-                    'bordercolor': '#2a1f45',
-                    'steps': [
-    {'range': [0,   12],  'color': 'rgba(114,232,160,0.15)'},
-    {'range': [12,  35.4],'color': 'rgba(245,200,66,0.15)'},
-    {'range': [35.4,55.4],'color': 'rgba(245,167,66,0.15)'},
-    {'range': [55.4,150], 'color': 'rgba(255,107,138,0.15)'},
-    {'range': [150, 300], 'color': 'rgba(201,79,255,0.15)'},
-],
-                    'threshold': {'line': {'color': '#fff', 'width': 2}, 'thickness': 0.8, 'value': predicted_pm},
-                },
-                title={'text': "PM2.5 Level", 'font': {'color': '#b8aed0', 'size': 13}},
-            ))
-            fig3.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#b8aed0",
-                font_family="DM Sans",
-                height=300,
-                margin=dict(l=20, r=20, t=50, b=20),
-            )
-            st.plotly_chart(fig3, use_container_width=True)
-
-# ══════════════════════════════════════════════════════════════
-# TAB 2 — HISTORICAL
-# ══════════════════════════════════════════════════════════════
-with tab2:
-    st.markdown("##### 48-Hour Input Window (Simulated Beijing Dataset)")
-    hours48, pm48, temp48, wind48 = simulate_history()
-
-    fig_hist = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
-                              subplot_titles=("PM2.5 (µg/m³)", "Temperature (°C)", "Wind Speed (m/s)"))
-
-    fig_hist.add_trace(go.Scatter(x=hours48, y=pm48, mode='lines',
-        line=dict(color='#a972f5', width=2), fill='tozeroy',
-        fillcolor='rgba(169,114,245,0.1)', name='PM2.5'), row=1, col=1)
-
-    fig_hist.add_trace(go.Scatter(x=hours48, y=temp48, mode='lines',
-        line=dict(color='#72e8a0', width=1.8), name='Temp'), row=2, col=1)
-
-    fig_hist.add_trace(go.Bar(x=hours48, y=wind48,
-        marker_color='rgba(169,114,245,0.5)', name='Wind'), row=3, col=1)
-
-    fig_hist.update_layout(
-        **PLOT_LAYOUT, height=480, showlegend=False,
-        margin=DEFAULT_MARGIN,
-        title=dict(text="Historical 48-Hour Conditions", font_size=15, font_color="#c49dff"),
-    )
-    for i in range(1, 4):
-        fig_hist.update_xaxes(gridcolor="rgba(160,120,255,0.1)", row=i, col=1)
-        fig_hist.update_yaxes(gridcolor="rgba(160,120,255,0.1)", row=i, col=1)
-
-    st.plotly_chart(fig_hist, use_container_width=True)
-
-    # Stats table
-    st.markdown("##### Feature Statistics")
-    np.random.seed(42)
-    stats = pd.DataFrame({
-        "Feature": ["PM2.5", "Temperature", "Dew Point", "Pressure", "Wind Speed", "Snow", "Rain"],
-        "Mean":    [98.6, 12.4, -1.8, 1016.4, 23.9, 0.05, 0.19],
-        "Std":     [92.1,  12.2,  14.1,   10.4, 49.7, 0.7, 1.4],
-        "Min":     [0.0,  -19.0, -40.0,  991.0,  0.45, 0.0, 0.0],
-        "Max":     [994.0, 41.0,  28.0, 1046.0, 585.6, 27.0,36.0],
-    })
-    st.dataframe(
-        stats.style
-            .format({"Mean": "{:.1f}", "Std": "{:.1f}", "Min": "{:.1f}", "Max": "{:.1f}"})
-            .set_properties(**{
-                'background-color': '#130f1e',
-                'color': '#b8aed0',
-                'border': '1px solid rgba(160,120,255,0.12)',
-            })
-            .set_table_styles([{
-                'selector': 'th',
-                'props': [('background-color','#1a1428'),('color','#c49dff'),
-                          ('border','1px solid rgba(160,120,255,0.15)')]
-            }]),
-        use_container_width=True, hide_index=True,
+    # ── Sidebar ──
+    st.sidebar.markdown("## 🌫️ AirSense")
+    st.sidebar.caption("CNN · BiLSTM · Bahdanau Attention")
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Model Architecture**")
+    st.sidebar.caption("1D-CNN → BiLSTM × 2 → Attention → Dense")
+    st.sidebar.markdown("**Training Data**")
+    st.sidebar.caption("UCI Beijing PM2.5 (2010 – 2014)")
+    st.sidebar.markdown("**I/O**")
+    st.sidebar.caption("Input: 48-hour window × 16 features")
+    st.sidebar.caption("Output: 24-hour PM2.5 forecast")
+    st.sidebar.markdown("---")
+    st.sidebar.info(
+        "Enter current weather conditions and click **Run Forecast**. "
+        "The 48-hour history is built internally. "
+        "Output is the raw neural network prediction."
     )
 
-# ══════════════════════════════════════════════════════════════
-# TAB 3 — MODEL
-# ══════════════════════════════════════════════════════════════
-with tab3:
-    c_l, c_r = st.columns([1.1, 1])
+    # ── Hero Banner ──
+    st.markdown(
+        """
+        <div style='background:linear-gradient(135deg,#3b0086 0%,#6a0dad 50%,#9333ea 100%);
+                    border-radius:16px;padding:2.5rem 2rem 2rem;margin-bottom:2rem;
+                    box-shadow:0 8px 30px rgba(106,13,173,0.3);'>
+            <h1 style='font-size:2.6rem;color:#ffffff;margin:0;font-weight:800;'>
+                🌫️ AirSense — Air Quality Predictor
+            </h1>
+            <p style='color:#e9d5ff;margin:0.5rem 0 0;font-size:1rem;'>
+                CNN + BiLSTM + Bahdanau Attention &nbsp;·&nbsp; 24-Hour PM2.5 Forecast
+                &nbsp;·&nbsp; Pure model output — no rule-based logic
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    with c_l:
-        st.markdown("##### Architecture Overview")
-        st.markdown("""
-        <div style="
-            background: #130f1e;
-            border: 1px solid rgba(160,120,255,0.18);
-            border-radius: 14px;
-            padding: 1.4rem;
-            font-size: 0.84rem;
-            line-height: 2;
-        ">
-        <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
-            <div style="background:#6b3fa0; border-radius:8px; padding:4px 14px; font-size:0.8rem;">Input</div>
-            <span style="color:#6b5590;">48 hours × 15 features</span>
-        </div>
-        <div style="color:#6b5590; padding-left:12px;">↓</div>
-        <div style="display:flex; align-items:center; gap:10px;">
-            <div style="background:#7a40b8; border-radius:8px; padding:4px 14px; font-size:0.8rem;">1D-CNN</div>
-            <span style="color:#6b5590;">kernel=3, filters=64 — local temporal patterns</span>
-        </div>
-        <div style="color:#6b5590; padding-left:12px;">↓</div>
-        <div style="display:flex; align-items:center; gap:10px;">
-            <div style="background:#8944cc; border-radius:8px; padding:4px 14px; font-size:0.8rem;">BiLSTM</div>
-            <span style="color:#6b5590;">128 units × 2 layers — long-range dependencies</span>
-        </div>
-        <div style="color:#6b5590; padding-left:12px;">↓</div>
-        <div style="display:flex; align-items:center; gap:10px;">
-            <div style="background:#9a50e0; border-radius:8px; padding:4px 14px; font-size:0.8rem;">Attention</div>
-            <span style="color:#6b5590;">Bahdanau — weighted temporal focus</span>
-        </div>
-        <div style="color:#6b5590; padding-left:12px;">↓</div>
-        <div style="display:flex; align-items:center; gap:10px;">
-            <div style="background:#a972f5; border-radius:8px; padding:4px 14px; font-size:0.8rem;">Dense</div>
-            <span style="color:#6b5590;">24-step PM2.5 forecast</span>
-        </div>
-        </div>
-        """, unsafe_allow_html=True)
+    if not model_loaded:
+        st.warning("Ensure **best_aq_model.h5** and **feature_scaler.pkl** are in the project root.")
+        return
 
-    with c_r:
-        st.markdown("##### Simulated Training Metrics")
-        epochs = np.arange(1, 51)
-        train_loss = 180 * np.exp(-epochs / 15) + 18 + np.random.normal(0, 2, 50)
-        val_loss   = 195 * np.exp(-epochs / 16) + 22 + np.random.normal(0, 3, 50)
+    # ── AQI Scale ──
+    st.markdown("##### AQI Reference Scale")
+    render_aqi_legend()
+    st.markdown("---")
 
-        fig_loss = go.Figure()
-        fig_loss.add_trace(go.Scatter(x=epochs, y=train_loss, name='Train Loss',
-            line=dict(color='#a972f5', width=2)))
-        fig_loss.add_trace(go.Scatter(x=epochs, y=val_loss, name='Val Loss',
-            line=dict(color='#72e8a0', width=2, dash='dot')))
-        fig_loss.update_layout(
-            **PLOT_LAYOUT, height=260,
-            margin=DEFAULT_MARGIN,
-            title=dict(text="Huber Loss Convergence", font_size=13, font_color="#c49dff"),
-            legend=dict(font_color='#b8aed0', bgcolor='rgba(0,0,0,0)'),
+    # ── INPUT FORM ──
+    st.markdown("## 📥 Enter Current Conditions")
+    st.caption(
+        "Fill in the present-hour weather readings. "
+        "The app builds a 48-hour input window internally and runs the CNN-BiLSTM model."
+    )
+
+    with st.form("input_form"):
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.markdown("#### 🌫️ Air Quality")
+            pm25 = st.number_input(
+                "Current PM2.5 (µg/m³)",
+                min_value=0.0, max_value=1000.0, value=75.0, step=1.0,
+                help="Particulate matter concentration right now",
+            )
+            month = st.selectbox(
+                "Month",
+                list(range(1, 13)), index=2,
+                format_func=lambda m: ["Jan","Feb","Mar","Apr","May","Jun",
+                                        "Jul","Aug","Sep","Oct","Nov","Dec"][m-1],
+            )
+            hour = st.slider("Current Hour (0–23)", 0, 23, 8)
+
+        with col2:
+            st.markdown("#### 🌡️ Temperature & Humidity")
+            temp = st.number_input("Temperature (°C)",
+                                   min_value=-40.0, max_value=60.0, value=10.0, step=0.5)
+            dewp = st.number_input("Dew Point (°C)",
+                                   min_value=-40.0, max_value=40.0, value=-2.0, step=0.5,
+                                   help="Lower = drier air")
+            pres = st.number_input("Atmospheric Pressure (hPa)",
+                                   min_value=900.0, max_value=1100.0, value=1013.0, step=0.5)
+
+        with col3:
+            st.markdown("#### 💨 Wind & Precipitation")
+            wind_dir = st.selectbox("Wind Direction", list(WIND_DIR_MAP.keys()), index=0)
+            iws = st.number_input("Cumulated Wind Speed (m/s)",
+                                  min_value=0.0, max_value=600.0, value=45.0, step=1.0,
+                                  help="Cumulative wind speed over the hour")
+            snow_hrs = st.number_input("Hours of Snow Today", min_value=0, max_value=24, value=0, step=1)
+            rain_hrs = st.number_input("Hours of Rain Today", min_value=0, max_value=24, value=0, step=1)
+
+        submitted = st.form_submit_button(
+            "🚀  Run CNN-BiLSTM Model Forecast",
+            type="primary",
+            use_container_width=True,
         )
-        st.plotly_chart(fig_loss, use_container_width=True)
 
-    # Performance metrics
-    st.markdown("##### Model Performance")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("RMSE",    "18.4 µg/m³",  "−2.1 vs baseline")
-    m2.metric("MAE",     "12.7 µg/m³",  "−1.8 vs baseline")
-    m3.metric("R² Score","0.87",         "+0.05 vs BiLSTM only")
-    m4.metric("Params",  "284 K",        "Lightweight")
+    # ── Run model ──
+    if submitted:
+        cbwd_code = WIND_DIR_MAP[wind_dir]
+        with st.spinner("Building 48-hour window & running model inference…"):
+            try:
+                df_48h  = build_48h_window(pm25, dewp, temp, pres, cbwd_code,
+                                            iws, snow_hrs, rain_hrs, month, hour, feature_cols)
+                results = predict_24h(df_48h, model, scaler, feature_cols)
+                st.session_state["results"]  = results
+                st.session_state["df_input"] = df_48h
+            except Exception as e:
+                st.error(f"Prediction error: {e}")
 
-    # Attention heatmap (simulated)
-    st.markdown("##### Bahdanau Attention Weights (Sample Hour)")
-    att_weights = np.abs(np.random.normal(0, 1, (1, 48)))
-    att_weights = att_weights / att_weights.sum()
+    # ── Display Results ──
+    if "results" in st.session_state:
+        results = st.session_state["results"]
+        df_48h  = st.session_state.get("df_input")
 
-    fig_att = go.Figure(go.Heatmap(
-        z=att_weights,
-        colorscale=[[0,'#130f1e'],[0.5,'#6b3fa0'],[1,'#c49dff']],
-        showscale=False,
-    ))
-    fig_att.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font_color="#b8aed0",
-        font_family="DM Sans",
-        height=90,
-        xaxis=dict(title="Hour (t-48 → t)", tickfont_size=10,
-                   gridcolor="rgba(0,0,0,0)", showgrid=False,
-                   zerolinecolor="rgba(0,0,0,0)"),
-        yaxis=dict(visible=False),
-        margin=dict(l=20, r=20, t=10, b=30),
-    )
-    st.plotly_chart(fig_att, use_container_width=True)
+        st.markdown("---")
+        st.markdown("## 📊 Model Forecast Results")
+        st.caption("✅ Raw inverse-transformed output from the CNN-BiLSTM network — no overrides applied.")
 
-# ══════════════════════════════════════════════════════════════
-# TAB 4 — ABOUT
-# ══════════════════════════════════════════════════════════════
-with tab4:
-    st.markdown("""
-    <div style="max-width:720px;">
-    <h3 style="font-family:'Cormorant Garamond',serif; color:#c49dff; font-weight:300; font-size:1.8rem;">
-        About This Project
-    </h3>
-    <p style="color:#b8aed0; line-height:1.8;">
-        AirSense is a deep-learning air quality monitoring system built for
-        <b style="color:#e0cfff;">early warning of hazardous PM2.5 levels</b> in Beijing.
-        It combines convolutional feature extraction with bidirectional temporal modelling
-        and learned attention to produce 24-hour ahead forecasts.
-    </p>
+        render_metrics(results)
+        st.markdown("---")
 
-    <h4 style="color:#a972f5; margin-top:1.6rem;">Dataset</h4>
-    <ul style="color:#b8aed0; line-height:2;">
-        <li>UCI Beijing PM2.5 — 43,824 hourly readings (2010–2014)</li>
-        <li>Features: PM2.5, Dew Point, Temperature, Pressure, Wind (dir + speed), Snow, Rain</li>
-        <li>Input window: <b style="color:#e0cfff;">48 hours</b> &nbsp;|&nbsp; Forecast horizon: <b style="color:#e0cfff;">24 hours</b></li>
-    </ul>
+        col_l, col_r = st.columns([2, 1])
+        with col_l:
+            render_forecast_chart(results)
+        with col_r:
+            render_aqi_distribution(results)
 
-    <h4 style="color:#a972f5; margin-top:1.2rem;">Architecture</h4>
-    <ul style="color:#b8aed0; line-height:2;">
-        <li><b style="color:#e0cfff;">1D-CNN</b> — extracts local temporal motifs (kernel = 3, filters = 64)</li>
-        <li><b style="color:#e0cfff;">BiLSTM × 2</b> — models long-range dependencies in both directions</li>
-        <li><b style="color:#e0cfff;">Bahdanau Attention</b> — focuses the decoder on the most relevant hours</li>
-        <li><b style="color:#e0cfff;">Dense head</b> — outputs 24 PM2.5 values</li>
-        <li>Loss: Huber &nbsp;|&nbsp; Optimiser: Adam &nbsp;|&nbsp; Framework: TensorFlow 2.x / Keras</li>
-    </ul>
+        st.markdown("---")
+        st.markdown("### 🕐 Hourly Forecast Breakdown")
+        render_hourly_table(results)
+        st.markdown("")
 
-    <h4 style="color:#a972f5; margin-top:1.2rem;">Possible Extensions</h4>
-    <ul style="color:#b8aed0; line-height:2;">
-        <li>Live feed from OpenAQ / CPCB API for Indian cities (Delhi, Bengaluru, Mumbai)</li>
-        <li>Transformer encoder for even longer temporal contexts</li>
-        <li>MC Dropout for uncertainty estimation</li>
-        <li>Edge deployment via TFLite for IoT monitoring nodes</li>
-    </ul>
+        if df_48h is not None:
+            render_input_history(df_48h)
 
-    <div style="margin-top:1.8rem; padding:1rem 1.4rem;
-                background:#1a1428; border-radius:12px;
-                border:1px solid rgba(160,120,255,0.18);
-                color:#6b5590; font-size:0.8rem; line-height:1.7;">
-        ⚠️ <b style="color:#b8aed0;">Note:</b> This web app uses a <b style="color:#b8aed0;">rule-based simulator</b>
-        in place of the trained Keras model (.h5 file). To use the real model,
-        load <code style="color:#a972f5;">model.h5</code> and <code style="color:#a972f5;">scaler.pkl</code>
-        via <code style="color:#a972f5;">keras.models.load_model()</code> and
-        <code style="color:#a972f5;">joblib.load()</code>, then replace the
-        <code style="color:#a972f5;">simulate_prediction()</code> call in <code style="color:#a972f5;">app.py</code>.
-    </div>
-    </div>
-    """, unsafe_allow_html=True)
+        st.markdown("---")
+        df_dl = pd.DataFrame([{
+            "Hour Ahead":   f"+{r['hour']:02d}h",
+            "PM2.5 µg/m³": round(r["pm25"], 2),
+            "AQI Category": r["category"],
+        } for r in results])
+        st.download_button(
+            "⬇️ Download Forecast CSV",
+            data=df_dl.to_csv(index=False).encode(),
+            file_name="pm25_24h_forecast.csv",
+            mime="text/csv",
+        )
+    else:
+        st.markdown("---")
+        st.info("Fill in the conditions above and click **Run CNN-BiLSTM Model Forecast** to see the 24-hour prediction.")
+
+if __name__ == "__main__":
+    main()

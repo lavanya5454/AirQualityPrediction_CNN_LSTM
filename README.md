@@ -2,6 +2,8 @@
 
 A Streamlit web app for interactive PM2.5 forecasting and air-quality visualization.
 
+![WhatsApp Image 2026-04-08 at 23 47 45](https://github.com/user-attachments/assets/2bac87f6-0266-4332-bac9-f9ce67dac128)
+
 ## Features
 
 - Interactive environmental inputs (temperature, dew point, pressure, wind, rain/snow, date/time)

@@ -11,9 +11,7 @@ import streamlit as st
 import plotly.graph_objects as go
 from collections import Counter
 
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+from keras.models import load_model
 
 # ─────────────────────────────────────────────
 # PAGE CONFIG

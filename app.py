@@ -207,7 +207,7 @@ class BahdanauAttention(layers.Layer):
 # ─────────────────────────────────────────────
 @st.cache_resource(show_spinner="⏳ Loading CNN-BiLSTM model…")
 def load_artifacts():
-    model  = keras.models.load_model(
+    model  = load_model(
         MODEL_PATH,
         custom_objects={"BahdanauAttention": BahdanauAttention},
         compile=False,
